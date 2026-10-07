@@ -79,7 +79,35 @@ const fy=layout.height-100;text($('brand').value,48,fy,35,fg,800,350);text($('pr
 function draw(){canvas.height=posterLayout().height;render(canvas.getContext('2d'),1200,canvas.height);updateDimensions();$('status').textContent='Ready to export';}
 for(const id of ['name','device','brand','product','author','accent','background'])$(id).addEventListener('input',draw);
 $('resolution').onchange=updateDimensions;
-$('presetFile').onchange=async event=>{const file=event.target.files?.[0];if(!file)return;try{const bytes=new Uint8Array(await file.arrayBuffer());const text=new TextDecoder().decode(bytes);const nameMatch=text.match(/Pocket Master[\0\xff\s]*([A-Za-z0-9][A-Za-z0-9 _+.-]{1,31})/);const presetName=(nameMatch?.[1]||file.name.replace(/\.prst$/i,'')).trim();$('name').value=presetName;const ascii=text.replace(/[\0\xff\x01-\x1f]+/g,' ');if(/Jpn Drive/i.test(ascii)||/JP.?Drive/i.test(file.name)){const drive=effects.find(e=>e.id==='DRV');drive.model='JP Dist';drive.params=modelParameters('DRV','JP Dist',drive.params);drive.on=true;}$('status').textContent=`Imported ${file.name}`;buttons();editor();draw();}catch(error){$('status').textContent='Could not read this preset file';}};
+function importedEffects(preset){
+ const next=preset.modules.map(module=>{
+  if(!module.model||!effectModels[module.id].includes(module.model))throw new Error('Unsupported '+module.id+' model ('+module.modelId+'). Your current poster was kept.');
+  const effect=structuredClone(initial.find(e=>e.id===module.id));
+  effect.model=module.model;effect.on=module.on;effect.params=modelParameters(effect.id,effect.model);
+  effect.params.forEach(p=>{
+   const aliases={'Tone':'Tone Cut','High Pitch':'High','H-VOL':'H-Vol','L-VOL':'L-Vol'};
+   const slot=module.slots[p[0]]??module.slots[aliases[p[0]]]??(module.model==='B-Chorus'&&p[0]==='Tone'?module.slots.VOL:undefined);
+   if(slot===undefined)throw new Error('Missing parameter mapping for '+module.id+' / '+p[0]+'.');
+   const value=module.values[slot];
+   if(p[6]&&(!Number.isInteger(value)||value<0||value>=p[6].length))throw new Error('Invalid '+p[0]+' setting.');
+   p[1]=value;
+   if(!p[6]&&!p[7]){p[2]=Math.min(p[2],value);p[3]=Math.max(p[3],value);}
+  });
+  return effect;
+ });
+ return preset.chain.map(id=>next.find(e=>e.id===id));
+}
+$('presetFile').onchange=async event=>{
+ const file=event.target.files?.[0];if(!file)return;
+ $('status').textContent='Reading preset…';
+ try{
+  if(file.size>1024*1024)throw new Error('Choose a single exported .prst preset.');
+  const preset=decodePocketMasterPreset(await file.arrayBuffer()),next=importedEffects(preset);
+  effects=next;selected=0;$('name').value=preset.name;
+  buttons();editor();draw();$('status').textContent='Imported '+preset.name+' · all effect settings loaded';
+ }catch(error){$('status').textContent=error.message||'Could not read this preset file.';}
+ finally{event.target.value='';}
+};
 $('download').onclick=async()=>{const b=$('download');b.disabled=true;$('status').textContent='Preparing image…';try{const scale=Number($('resolution').value),out=document.createElement('canvas');out.width=1200*scale;out.height=posterLayout().height*scale;render(out.getContext('2d'),out.width,out.height);const blob=await new Promise(resolve=>out.toBlob(resolve,'image/png'));if(!blob)throw new Error('Export failed');const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=($('name').value.replace(/[^a-z0-9_-]/gi,'-')||'preset')+'.png';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);$('status').textContent='PNG downloaded';}catch(e){$('status').textContent='Export failed. Please try again.';}finally{b.disabled=false;}};
 $('reset').onclick=()=>{effects=structuredClone(initial);selected=0;for(const[id,value]of Object.entries({name:'PluginBaby',device:'SONICAKE POCKET MASTER PRESET',brand:'SONICAKE',product:'POCKET MASTER',author:'',accent:'#ff863e',background:'dark'}))$(id).value=value;buttons();editor();draw();$('status').textContent='Reference restored';};
 buttons();editor();draw();
